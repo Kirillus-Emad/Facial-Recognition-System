@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition System</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎭 Real-time Face Recognition</h1>
+            <p>Upload a video or use your webcam to see processed frames in real-time</p>
+            <div class="header-actions">
+                <button onclick="openRegisterModal()" class="register-header-btn">
+                    ➕ Register New Face
+                </button>
+                <button onclick="openDeleteModal()" class="delete-header-btn">
+                    🗑️ Delete Person
+                </button>
+                <button onclick="downloadAttendanceReport('monthly')" class="register-header-btn">
+                    📊 Monthly Report
+                </button>
+                <button onclick="downloadAttendanceReport('detailed')" class="register-header-btn">
+                    📋 Detailed Report
+                </button>
+            </div>
+        </header>
+
+        <div class="upload-section">
+            <div class="upload-box" id="uploadBox">
+                <input type="file" id="videoInput" accept="video/*" hidden>
+                <div class="upload-content">
+                    <div class="upload-icon">📹</div>
+                    <h3>Choose Input Source</h3>
+                    <p>Upload a video file or use your webcam</p>
+                    <div class="button-group">
+                        <button onclick="document.getElementById('videoInput').click()">📹 Upload Video</button>
+                        <button onclick="startWebcam()" id="webcamBtn" class="webcam-button">📷 Start Webcam</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="file-info" id="fileInfo" style="display: none;">
+                <h4>Selected File:</h4>
+                <p id="fileName"></p>
+                
+                <!-- Camera View Selection -->
+                <div class="camera-view-selection">
+                    <h4>Select Camera View:</h4>
+                    <div class="view-options">
+                        <label class="view-option">
+                            <input type="radio" name="cameraView" value="Front" checked>
+                            <span>📷 Front</span>
+                        </label>
+                        <label class="view-option">
+                            <input type="radio" name="cameraView" value="Left">
+                            <span>⬅️ Left</span>
+                        </label>
+                        <label class="view-option">
+                            <input type="radio" name="cameraView" value="Right">
+                            <span>➡️ Right</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <button onclick="uploadVideo()" id="uploadBtn">Start Video Processing</button>
+            </div>
+
+            <div class="webcam-info" id="webcamInfo" style="display: none;">
+                <h4>Webcam Session:</h4>
+                <p>Live camera feed processing</p>
+                
+                <!-- Camera View Selection for Webcam -->
+                <div class="camera-view-selection">
+                    <h4>Select Camera View:</h4>
+                    <div class="view-options">
+                        <label class="view-option">
+                            <input type="radio" name="webcamView" value="Front" checked>
+                            <span>📷 Front</span>
+                        </label>
+                        <label class="view-option">
+                            <input type="radio" name="webcamView" value="Left">
+                            <span>⬅️ Left</span>
+                        </label>
+                        <label class="view-option">
+                            <input type="radio" name="webcamView" value="Right">
+                            <span>➡️ Right</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <button onclick="startWebcamProcessing()" id="startWebcamBtn">🎬 Start Webcam Processing</button>
+            </div>
+        </div>
+
+        <!-- Dashboard Statistics - REMOVED MONTHLY/DETAILED REPORT BUTTONS -->
+        <div class="dashboard-statistics" id="dashboardStatistics" style="display: none;">
+            <div class="stats-grid">
+                <div class="stat-card total-card">
+                    <div class="stat-label">Total Detected</div>
+                    <div class="stat-value" id="totalFaces">0</div>
+                </div>
+                <div class="stat-card present-card" onclick="showKnownFaces()">
+                    <div class="stat-label">Present</div>
+                    <div class="stat-value" id="knownFaces">0</div>
+                </div>
+                <div class="stat-card unknown-card" onclick="showUnknownFaces()">
+                    <div class="stat-label">Unknown</div>
+                    <div class="stat-value" id="unknownFaces">0</div>
+                </div>
+                <div class="stat-card download-card" onclick="downloadDashboardStats()">
+                    <div class="stat-label">Download Report</div>
+                    <div class="stat-icon">📥</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress Section -->
+        <div class="progress-section" id="progressSection" style="display: none;">
+            <div class="progress-header">
+                <h3 id="processingTitle">Video Processing</h3>
+                <button onclick="stopProcessing()" id="stopBtn" class="stop-button">Stop Processing</button>
+            </div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <p class="progress-text" id="progressText">Processing: 0.0%</p>
+        </div>
+
+        <!-- Live Frames Section -->
+        <div class="live-frames-section" id="liveFramesSection" style="display: none;">
+            <h3 class="section-title">Live Processed Frames</h3>
+            <div class="frame-viewer">
+                <img id="liveStream" src="" alt="Connecting to stream...">
+                <div class="frame-info">
+                    <p id="frameStatus">Connecting to stream...</p>
+                    <p id="frameCount">Frames: undefined/undefined</p>
+                    <p id="sourceInfo">Source: Uploaded Video</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Register Face Modal -->
+        <div id="registerModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>➕ Register New Face</h3>
+                    <button class="close-button" onclick="closeRegisterModal()">✕</button>
+                </div>
+                <div class="register-form">
+                    <div class="form-group">
+                        <label for="personId">Person ID:</label>
+                        <input type="number" id="personId" placeholder="Enter person ID (e.g., 101)" required min="1">
+                        <p class="form-hint">💡 Use a unique numeric ID for each person</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="faceImages">Face Images:</label>
+                        
+                        <div class="upload-box-container">
+                            <div class="upload-box-header">
+                                <div class="upload-box-title">📸 Face Images</div>
+                                <div class="upload-box-subtitle">Upload 1-5 clear photos of the person's face</div>
+                            </div>
+                            
+                            <button type="button" class="choose-images-btn" onclick="document.getElementById('faceImages').click()">
+                                📂 Choose Images
+                            </button>
+                            
+                            <input type="file" id="faceImages" accept="image/*" multiple hidden>
+                            
+                            <div class="preview-container" id="previewContainer"></div>
+                            <div class="image-count" id="imageCount" style="display: none;">No images selected</div>
+                        </div>
+                    </div>
+                    <button onclick="registerNewFace()" class="register-btn" id="registerBtnModal" disabled>Register Face</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Delete Person Modal -->
+        <div id="deleteModal" class="modal">
+            <div class="modal-content modal-content-small">
+                <div class="modal-header modal-header-danger">
+                    <h3>🗑️ Delete Person</h3>
+                    <button class="close-button" onclick="closeDeleteModal()">✕</button>
+                </div>
+                <div class="delete-form">
+                    <div class="form-group">
+                        <label for="deletePersonId">Person ID to Delete:</label>
+                        <input type="number" id="deletePersonId" placeholder="Enter person ID" required min="1">
+                        <p class="warning-text">⚠️ Warning: This will permanently delete the person and their face embeddings from the database. This action cannot be undone!</p>
+                    </div>
+                    <div class="button-group-modal">
+                        <button onclick="closeDeleteModal()" class="cancel-btn">Cancel</button>
+                        <button onclick="deletePerson()" class="delete-btn" id="deleteBtnModal">Delete Person</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Faces Gallery Modal -->
+        <div id="facesModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modalTitle">Faces Gallery</h3>
+                    <button class="close-button" onclick="closeModal()">✕</button>
+                </div>
+                <div class="modal-subtitle" id="modalSubtitle"></div>
+                <div id="facesGallery" class="faces-gallery">
+                    <!-- Faces will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Final Result Section -->
+        <div class="result-section" id="resultSection" style="display: none;">
+            <h3>Final Processed Video</h3>
+            <video id="processedVideo" controls>
+                Your browser does not support the video tag.
+            </video>
+            <div class="download-section">
+                <a id="downloadLink" download>
+                    <button class="download-btn">📥 Download Video Report</button>
+                </a>
+            </div>
+        </div>
+
+        <!-- Stopped Section -->
+        <div class="stopped-section" id="stoppedSection" style="display: none;">
+            <h3>ℹ️ Processing Stopped</h3>
+            <p id="stoppedMessage">Processing was stopped by user.</p>
+            <div class="download-section" id="videoDownloadSection">
+                <a id="partialDownloadLink" download>
+                    <button class="download-btn">📥 Download Partial Video</button>
+                </a>
+            </div>
+        </div>
+
+        <!-- Error Section -->
+        <div class="error-section" id="errorSection" style="display: none;">
+            <h3>❌ Error</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
