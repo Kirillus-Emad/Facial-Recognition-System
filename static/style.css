@@ -887,6 +887,57 @@ header p {
     box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3);
 }
 
+/* NEW: Start New Processing Button */
+.start-new-btn {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+    border: none;
+    padding: 15px 40px;
+    border-radius: 30px;
+    cursor: pointer;
+    font-size: 1.1em;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    margin-top: 25px;
+    display: inline-block;
+    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.3);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.start-new-btn:hover {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    transform: translateY(-3px);
+    box-shadow: 0 12px 30px rgba(59, 130, 246, 0.4);
+}
+
+/* Add spacing between buttons */
+.download-section + .start-new-btn {
+    margin-left: 15px;
+}
+
+/* Section buttons container - FIXED */
+.section-buttons {
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+    align-items: center;
+    margin-top: 30px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    padding: 20px;
+    background: rgba(243, 244, 246, 0.5);
+    border-radius: 15px;
+    border: 2px dashed #e5e7eb;
+}
+
+/* For better visual separation in result sections */
+.result-section .section-buttons,
+.stopped-section .section-buttons,
+.error-section .section-buttons {
+    margin-top: 30px;
+    padding: 20px;
+}
+
 /* Stopped Section */
 .stopped-section {
     padding: 50px;
@@ -915,6 +966,46 @@ header p {
     color: #991b1b;
     margin-bottom: 15px;
     font-size: 2em;
+}
+
+/* Reset button styling */
+.reset-button {
+    background: #3b82f6;
+    color: white;
+    border: none;
+    padding: 12px 30px;
+    border-radius: 25px;
+    cursor: pointer;
+    font-size: 1em;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    margin-top: 20px;
+    margin-bottom: 20px;
+    display: inline-block;
+}
+
+.reset-button:hover {
+    background: #2563eb;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(59, 130, 246, 0.3);
+}
+
+/* Optional: Add an icon to the reset button */
+.reset-button::before {
+    content: '🔄 ';
+    margin-right: 8px;
+}
+
+/* Add this to your existing style.css file - just the new download card styling */
+
+.download-card {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    cursor: pointer;
+}
+
+.download-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 40px rgba(16, 185, 129, 0.35);
 }
 
 /* Responsive Design */
@@ -964,16 +1055,129 @@ header p {
     .button-group-modal {
         flex-direction: column;
     }
-
-    /* Add this to your existing style.css file - just the new download card styling */
-
-    .download-card {
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        cursor: pointer;
+    
+    .start-new-btn {
+        width: 100%;
+        margin-left: 0;
+        margin-top: 15px;
     }
-
-    .download-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 15px 40px rgba(16, 185, 129, 0.35);
+    
+    .section-buttons {
+        flex-direction: column;
+        align-items: center;
     }
+    
+    .section-buttons button {
+        width: 100%;
+        max-width: 300px;
+    }
+/* Start New Session Button */
+.start-new-session-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white !important;
+    
+    padding: 18px 36px;
+    border: none;
+    border-radius: 16px;
+    
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    cursor: pointer;
+    
+    position: relative;
+    overflow: hidden;
+    
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4),
+                0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+
+
+.start-new-session-btn::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+    transition: left 0.5s ease;
+}
+
+.start-new-session-btn:hover::before {
+    left: 100%;
+}
+
+.start-new-session-btn:hover {
+    background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 12px 32px rgba(102, 126, 234, 0.5),
+                0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.start-new-session-btn:active {
+    transform: translateY(-2px) scale(1);
+    box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4),
+                0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.start-new-session-btn:disabled {
+    background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+}
+
+/* Icon animation for the button */
+.start-new-session-btn::after {
+    content: "🔄";
+    font-size: 1.3rem;
+    display: inline-block;
+    animation: rotate 2s linear infinite;
+    animation-play-state: paused;
+}
+
+
+.start-new-session-btn:hover::after {
+    animation-play-state: running;
+}
+
+
+@keyframes rotate {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .start-new-session-btn {
+        width: 100%;
+        max-width: 100%;
+        padding: 16px 32px;
+        font-size: 1.05rem;
+    }
+    
+    .section-buttons {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .section-buttons button {
+        width: 100%;
+        max-width: 300px;
+    }
+}
+
 }

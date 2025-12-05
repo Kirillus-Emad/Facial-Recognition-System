@@ -7,6 +7,32 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+
+    <div id="dbConfigModal" class="modal" style="display: block;">
+        <div class="modal-content modal-content-small">
+            <div class="modal-header">
+                <h3>🔧 Database Configuration</h3>
+            </div>
+            <div class="db-config-form">
+                <p>Configure your PostgreSQL database or continue without database (all faces will be unknown)</p>
+                
+                <div class="form-group">
+                    <label>PostgreSQL Connection URL:</label>
+                    <input type="text" id="dbUrl" placeholder="postgresql://user:pass@host:port/dbname?sslmode=require">
+                    <p class="form-hint">Format: postgresql://user:password@host:port/database?sslmode=require</p>
+                </div>
+                
+                <div class="button-group-modal">
+                    <button onclick="skipDatabase()" class="cancel-btn">Skip Database</button>
+                    <button onclick="configureDatabase()" class="register-btn">Connect Database</button>
+                </div>
+                
+                <div id="dbStatus" style="display:none; margin-top: 15px;"></div>
+            </div>
+        </div>
+    </div>
+
+
     <div class="container">
         <header>
             <h1>🎭 Real-time Face Recognition</h1>
@@ -94,7 +120,7 @@
             </div>
         </div>
 
-        <!-- Dashboard Statistics - REMOVED MONTHLY/DETAILED REPORT BUTTONS -->
+        <!-- Dashboard Statistics -->
         <div class="dashboard-statistics" id="dashboardStatistics" style="display: none;">
             <div class="stats-grid">
                 <div class="stat-card total-card">
@@ -189,7 +215,7 @@
                     <div class="form-group">
                         <label for="deletePersonId">Person ID to Delete:</label>
                         <input type="number" id="deletePersonId" placeholder="Enter person ID" required min="1">
-                        <p class="warning-text">⚠️ Warning: This will permanently delete the person and their face embeddings from the database. This action cannot be undone!</p>
+                        <p class="warning-text">⚠️ Warning: This will permanently delete the person and their face embeddings. This action cannot be undone!</p>
                     </div>
                     <div class="button-group-modal">
                         <button onclick="closeDeleteModal()" class="cancel-btn">Cancel</button>
@@ -212,10 +238,9 @@
                 </div>
             </div>
         </div>
-
-        <!-- Final Result Section -->
+<!-- Final Result Section -->
         <div class="result-section" id="resultSection" style="display: none;">
-            <h3>Final Processed Video</h3>
+            <h3>✅ Processing Complete</h3>
             <video id="processedVideo" controls>
                 Your browser does not support the video tag.
             </video>
@@ -224,24 +249,36 @@
                     <button class="download-btn">📥 Download Video Report</button>
                 </a>
             </div>
+            <!-- FIXED: Added button container -->
+            <div id="resultSectionButtons" class="section-buttons" style="margin-top: 30px;">
+                <!-- "New Processing" button will be added here dynamically -->
+            </div>
         </div>
 
         <!-- Stopped Section -->
         <div class="stopped-section" id="stoppedSection" style="display: none;">
-            <h3>ℹ️ Processing Stopped</h3>
+            <h3>⏸️ Processing Stopped</h3>
             <p id="stoppedMessage">Processing was stopped by user.</p>
             <div class="download-section" id="videoDownloadSection">
                 <a id="partialDownloadLink" download>
-                    <button class="download-btn">📥 Download Partial Video</button>
+                    <button class="download-btn">📥 Download Video</button>
                 </a>
+            </div>
+            <!-- Button container already exists -->
+            <div id="stoppedSectionButtons" class="section-buttons">
+                <!-- Button will be added dynamically -->
+            </div>
+        </div>
+        <!-- Error Section -->
+        <div class="error-section" id="errorSection" style="display: none;">
+            <h3>❌ Error Occurred</h3>
+            <p id="errorMessage"></p>
+            <!-- FIXED: Added button container -->
+            <div id="errorSectionButtons" class="section-buttons" style="margin-top: 30px;">
+                <!-- "New Processing" button will be added here dynamically -->
             </div>
         </div>
 
-        <!-- Error Section -->
-        <div class="error-section" id="errorSection" style="display: none;">
-            <h3>❌ Error</h3>
-            <p id="errorMessage"></p>
-        </div>
     </div>
 
     <script src="/static/script.js"></script>

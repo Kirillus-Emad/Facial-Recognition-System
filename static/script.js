@@ -1,3 +1,9 @@
+
+
+let videoStream = null;
+let webcamCanvas = null;
+let webcamInterval = null;
+let isDatabaseConnected = false;
 let currentStreamId = '';
 let progressInterval;
 let isWebcam = false;
@@ -5,6 +11,97 @@ let selectedFiles = [];
 let videoStartTime = null;
 let videoEndTime = null;
 let videoName = '';
+
+
+// FIXED: Proper button creation with correct CSS class
+
+function createNewProcessingButton(containerId) {
+    const buttonsContainer = document.getElementById(containerId);
+    if (buttonsContainer) {
+        buttonsContainer.innerHTML = '';
+        const newSessionButton = document.createElement('button');
+        // FIXED: Use the CSS class that exists in style.css
+        newSessionButton.className = 'start-new-session-btn';
+        newSessionButton.textContent = 'New Processing';
+        newSessionButton.onclick = startNewSession;
+        buttonsContainer.appendChild(newSessionButton);
+    }
+}
+
+// Database configuration
+async function configureDatabase() {
+    const dbUrl = document.getElementById('dbUrl').value.trim();
+    const statusDiv = document.getElementById('dbStatus');
+    
+    if (!dbUrl) {
+        statusDiv.innerHTML = '<p style="color: red;">Please enter a database URL</p>';
+        statusDiv.style.display = 'block';
+        return;
+    }
+    
+    statusDiv.innerHTML = '<p>Connecting...</p>';
+    statusDiv.style.display = 'block';
+    
+    try {
+        const formData = new FormData();
+        formData.append('database_url', dbUrl);
+        
+        const response = await fetch('/configure-database/', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            isDatabaseConnected = true;
+            statusDiv.innerHTML = '<p style="color: green;">✅ ' + result.message + '</p>';
+            setTimeout(() => {
+                document.getElementById('dbConfigModal').style.display = 'none';
+            }, 2000);
+        } else {
+            isDatabaseConnected = false;
+            statusDiv.innerHTML = '<p style="color: red;">❌ ' + result.error + '</p>';
+        }
+    } catch (error) {
+        isDatabaseConnected = false;
+        statusDiv.innerHTML = '<p style="color: red;">❌ Error: ' + error.message + '</p>';
+    }
+}
+
+async function skipDatabase() {
+    try {
+        const formData = new FormData();
+        formData.append('skip_database', 'true');
+        
+        const response = await fetch('/configure-database/', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        isDatabaseConnected = false;
+        alert('⚠️ ' + result.message);
+        document.getElementById('dbConfigModal').style.display = 'none';
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
+}
+
+// Modify downloadDashboardStats to use new endpoint
+async function downloadDashboardStats() {
+    if (!currentStreamId) {
+        alert('❌ No active session');
+        return;
+    }
+    
+    try {
+        window.location.href = `/download-dashboard-report/${currentStreamId}`;
+        alert('✅ Report downloaded successfully!');
+    } catch (error) {
+        alert('❌ Error: ' + error.message);
+    }
+}
 
 // File selection handler
 document.getElementById('videoInput').addEventListener('change', function(e) {
@@ -37,8 +134,7 @@ function getSelectedWebcamView() {
     const selectedView = document.querySelector('input[name="webcamView"]:checked');
     return selectedView ? selectedView.value : 'Front';
 }
-
-// Start webcam processing
+// FIXED: Start webcam processing with browser capture
 async function startWebcamProcessing() {
     const startBtn = document.getElementById('startWebcamBtn');
     startBtn.disabled = true;
@@ -48,9 +144,41 @@ async function startWebcamProcessing() {
     videoStartTime = new Date();
 
     try {
+        console.log('🎥 Requesting browser camera access...');
+        
+        // Request camera access from browser
+        videoStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                width: { ideal: 640 },
+                height: { ideal: 640 },
+                facingMode: 'user'
+            } 
+        });
+        
+        console.log('✅ Camera access granted');
+        
+        // Create hidden video element to capture frames
+        const videoElement = document.createElement('video');
+        videoElement.srcObject = videoStream;
+        videoElement.autoplay = true;
+        videoElement.playsInline = true;
+        
+        // Wait for video to be ready
+        await new Promise((resolve, reject) => {
+            videoElement.onloadedmetadata = () => {
+                videoElement.play();
+                console.log(`📹 Video ready: ${videoElement.videoWidth}x${videoElement.videoHeight}`);
+                resolve();
+            };
+            videoElement.onerror = reject;
+            setTimeout(reject, 5000); // 5 second timeout
+        });
+        
+        // Initialize webcam session on server
         const formData = new FormData();
         formData.append('camera_view', cameraView);
 
+        console.log('🌐 Initializing server session...');
         const response = await fetch('/start-webcam/', {
             method: 'POST',
             body: formData
@@ -60,21 +188,152 @@ async function startWebcamProcessing() {
         
         if (response.ok) {
             currentStreamId = result.session_id;
-            console.log(`Webcam started with camera view: ${result.camera_view}`);
+            isWebcam = true;
+            console.log(`✅ Webcam session initialized: ${currentStreamId}`);
+            
+            // Show processing UI
             showProcessingUI();
             startLiveStream();
             startProgressMonitoring();
+            
+            // Start capturing and sending frames
+            startFrameCapture(videoElement, result.session_id);
+            
+            startBtn.textContent = '🎬 Start Webcam Processing';
         } else {
-            showError(result.detail || 'Failed to start webcam');
+            throw new Error(result.detail || 'Failed to initialize webcam session');
         }
     } catch (error) {
-        showError('Network error: ' + error.message);
+        console.error('❌ Webcam error:', error);
+        
+        if (error.name === 'NotAllowedError') {
+            alert('❌ Camera access denied. Please allow camera access and try again.');
+        } else if (error.name === 'NotFoundError') {
+            alert('❌ No camera found on your device.');
+        } else if (error.name === 'NotReadableError') {
+            alert('❌ Camera is already in use by another application.');
+        } else {
+            alert('❌ Error accessing camera: ' + error.message);
+        }
+        
+        stopVideoStream();
+        startBtn.textContent = '🎬 Start Webcam Processing';
     } finally {
         startBtn.disabled = false;
-        startBtn.textContent = '🎬 Start Webcam Processing';
     }
 }
+// FIXED: Capture frames from browser and send to server
+function startFrameCapture(videoElement, sessionId) {
+    // Create canvas for frame capture
+    webcamCanvas = document.createElement('canvas');
+    const ctx = webcamCanvas.getContext('2d');
+    
+    // Set canvas size to match video
+    webcamCanvas.width = videoElement.videoWidth || 640;
+    webcamCanvas.height = videoElement.videoHeight || 640;
+    
+    console.log(`🎨 Canvas created: ${webcamCanvas.width}x${webcamCanvas.height}`);
+    
+    let frameCount = 0;
+    let lastFrameTime = Date.now();
+    const targetFPS = 15;
+    const frameInterval = 1000 / targetFPS;
+    
+    // Capture and send frames
+    webcamInterval = setInterval(async () => {
+        const now = Date.now();
+        const elapsed = now - lastFrameTime;
+        
+        // Throttle to target FPS
+        if (elapsed < frameInterval) {
+            return;
+        }
+        
+        lastFrameTime = now;
+        
+        if (!videoElement.srcObject) {
+            console.log('⚠️ Video stream lost');
+            stopFrameCapture();
+            return;
+        }
+        
+        try {
+            // Draw current video frame to canvas
+            ctx.drawImage(videoElement, 0, 0, webcamCanvas.width, webcamCanvas.height);
+            
+            // Convert canvas to base64 JPEG
+            const frameDataUrl = webcamCanvas.toDataURL('image/jpeg', 0.8);
+            
+            // Send frame to server
+            const formData = new FormData();
+            formData.append('frame_data', frameDataUrl);
+            
+            const response = await fetch(`/process-webcam-frame/${sessionId}`, {
+                method: 'POST',
+                body: formData
+            });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`❌ Frame ${frameCount} failed:`, response.status, errorText);
+            } else {
+                const result = await response.json();
+                if (frameCount % 30 === 0) { // Log every 30 frames
+                    console.log(`✅ Frame ${frameCount} processed`);
+                }
+            }
+            
+            frameCount++;
+        } catch (error) {
+            console.error('❌ Error capturing/sending frame:', error);
+        }
+    }, 50); // Check every 50ms, but throttle to targetFPS
+    
+    console.log(`🎬 Frame capture started at ${targetFPS} FPS`);
+}
 
+
+// Stop frame capture
+function stopFrameCapture() {
+    if (webcamInterval) {
+        clearInterval(webcamInterval);
+        webcamInterval = null;
+        console.log('⏹️ Frame capture stopped');
+    }
+    stopVideoStream();
+}
+
+// Stop video stream
+function stopVideoStream() {
+    if (videoStream) {
+        videoStream.getTracks().forEach(track => {
+            track.stop();
+            console.log(`🛑 Track stopped: ${track.kind}`);
+        });
+        videoStream = null;
+    }
+}
+// Show webcam stopped with download option
+function showWebcamStopped(videoPath) {
+    const stoppedMessage = document.getElementById('stoppedMessage');
+    const videoDownloadSection = document.getElementById('videoDownloadSection');
+    const partialDownloadLink = document.getElementById('partialDownloadLink');
+    
+    stoppedMessage.textContent = 'Webcam processing stopped. Download your processed video below.';
+    videoDownloadSection.style.display = 'block';
+    
+    if (videoPath) {
+        partialDownloadLink.href = videoPath;
+        partialDownloadLink.download = `webcam_processed_${currentStreamId}.mp4`;
+    }
+    
+    document.getElementById('stoppedSection').style.display = 'block';
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('liveFramesSection').style.display = 'none';
+    document.getElementById('resultSection').style.display = 'none';
+    
+    createNewProcessingButton('stoppedSectionButtons');
+}
 // Upload and process video
 async function uploadVideo() {
     const fileInput = document.getElementById('videoInput');
@@ -131,16 +390,35 @@ async function stopProcessing() {
     videoEndTime = new Date();
 
     try {
-        const response = await fetch(`/stop-processing/${currentStreamId}`, {
-            method: 'POST'
-        });
+        if (isWebcam) {
+            // Stop frame capture first
+            stopFrameCapture();
+            
+            // Stop webcam session on server
+            const response = await fetch(`/stop-webcam/${currentStreamId}`, {
+                method: 'POST'
+            });
 
-        const result = await response.json();
-        
-        if (response.ok) {
-            showStopped();
+            const result = await response.json();
+            
+            if (response.ok) {
+                showWebcamStopped(result.video_path);
+            } else {
+                showError('Failed to stop processing');
+            }
         } else {
-            showError('Failed to stop processing');
+            // Original video stop logic
+            const response = await fetch(`/stop-processing/${currentStreamId}`, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+            
+            if (response.ok) {
+                showStopped();
+            } else {
+                showError('Failed to stop processing');
+            }
         }
     } catch (error) {
         showError('Error stopping processing: ' + error.message);
@@ -149,7 +427,6 @@ async function stopProcessing() {
         stopBtn.textContent = 'Stop Processing';
     }
 }
-
 // Start live stream
 function startLiveStream() {
     const streamImg = document.getElementById('liveStream');
@@ -166,7 +443,6 @@ function startLiveStream() {
         }, 2000);
     };
 }
-
 // Start progress monitoring with dashboard updates
 function startProgressMonitoring() {
     if (progressInterval) {
@@ -211,7 +487,6 @@ function updateDashboard(data) {
     document.getElementById('knownFaces').textContent = data.known_faces_num || 0;
     document.getElementById('unknownFaces').textContent = data.unknown_faces_num || 0;
 }
-
 // Update progress UI
 function updateProgressUI(status) {
     const progressBar = document.getElementById('progressBar');
@@ -590,6 +865,16 @@ async function registerNewFace() {
         return;
     }
     
+    // ADD THIS CHECK:
+    if (!isDatabaseConnected) {
+        const confirmMsg = '⚠️ You are in temporary mode (no database).\n\n' +
+                          'The face will be registered temporarily and will be lost when you refresh the page.\n\n' +
+                          'Do you want to continue?';
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+    }
+    
     const registerBtn = document.getElementById('registerBtnModal');
     registerBtn.disabled = true;
     registerBtn.textContent = 'Registering...';
@@ -610,7 +895,14 @@ async function registerNewFace() {
         const result = await response.json();
         
         if (response.ok) {
-            alert(`✅ Successfully registered person ID ${personId}!\n\nImages processed: ${result.details.images_processed}/${result.details.images_provided}`);
+            const storageType = result.details.storage_type || (isDatabaseConnected ? 'database' : 'memory');
+            const storageMsg = storageType === 'database' 
+                ? '\n\n✅ Saved to database permanently.' 
+                : '\n\n⚠️ Saved temporarily (will be lost on refresh).';
+            
+            alert(`✅ Successfully registered person ID ${personId}!` +
+                  `\n\nImages processed: ${result.details.images_processed}/${result.details.images_provided}` +
+                  storageMsg);
             
             document.getElementById('personId').value = '';
             document.getElementById('faceImages').value = '';
@@ -691,7 +983,6 @@ function closeDeleteModal() {
         deleteModal.style.display = 'none';
     }
 }
-
 async function deletePerson() {
     const personId = document.getElementById('deletePersonId').value.trim();
     
@@ -700,7 +991,12 @@ async function deletePerson() {
         return;
     }
     
-    const confirmed = confirm(`⚠️ Are you sure you want to delete person ID ${personId}?\n\nThis action cannot be undone!`);
+    // ADD THIS CHECK:
+    const storageMsg = isDatabaseConnected 
+        ? '\n\nThis will permanently delete from the database!'
+        : '\n\nThis will delete from temporary memory!';
+    
+    const confirmed = confirm(`⚠️ Are you sure you want to delete person ID ${personId}?${storageMsg}\n\nThis action cannot be undone!`);
     
     if (!confirmed) return;
     
@@ -716,7 +1012,11 @@ async function deletePerson() {
         const result = await response.json();
         
         if (response.ok) {
-            alert(`✅ Successfully deleted person ID ${personId}`);
+            const storageType = result.storage_type || (isDatabaseConnected ? 'database' : 'memory');
+            const msg = storageType === 'database'
+                ? `✅ Successfully deleted person ID ${personId} from database`
+                : `✅ Successfully deleted person ID ${personId} from temporary memory`;
+            alert(msg);
             closeDeleteModal();
         } else {
             alert(`❌ Deletion failed: ${result.detail || 'Unknown error'}`);
@@ -729,11 +1029,26 @@ async function deletePerson() {
     }
 }
 
-// ATTENDANCE REPORT FUNCTIONS
+// ATTENDANCE REPORT FUNCTIONS - FIXED: Check database connection
 async function downloadAttendanceReport(reportType) {
     console.log(`Downloading ${reportType} attendance report...`);
     
+    // ADD THESE LINES AT THE START:
+    if (!isDatabaseConnected) {
+        alert('❌ Database not connected. Please configure database first to use attendance reports.');
+        return;
+    }
+    
     try {
+        // First check if database is connected
+        const statusResponse = await fetch('/database-status/');
+        const dbStatus = await statusResponse.json();
+        
+        if (!dbStatus.connected) {
+            alert('❌ Database not connected. Please configure database to use attendance reports.');
+            return;
+        }
+        
         // Show loading message
         const loadingMsg = document.createElement('div');
         loadingMsg.id = 'reportLoadingMsg';
@@ -801,6 +1116,9 @@ window.onclick = function(event) {
     if (event.target === deleteModal) closeDeleteModal();
 }
 
+// Add reset function after processing ends
+
+
 // Show processing UI
 function showProcessingUI() {
     document.getElementById('fileInfo').style.display = 'none';
@@ -812,21 +1130,24 @@ function showProcessingUI() {
     document.getElementById('stoppedSection').style.display = 'none';
     document.getElementById('errorSection').style.display = 'none';
 }
-
 // Show final result
 function showFinalResult() {
     const videoElement = document.getElementById('processedVideo');
     const downloadLink = document.getElementById('downloadLink');
     
-    videoElement.src = `/video/${currentStreamId}`;
-    downloadLink.href = `/video/${currentStreamId}`;
-    downloadLink.download = `processed_${currentStreamId}`;
+    if (currentStreamId) {
+        videoElement.src = `/video/${currentStreamId}`;
+        downloadLink.href = `/video/${currentStreamId}`;
+        downloadLink.download = `processed_${currentStreamId}`;
+    }
     
     document.getElementById('resultSection').style.display = 'block';
     document.getElementById('progressSection').style.display = 'none';
     document.getElementById('liveFramesSection').style.display = 'none';
+    
+    // Create button with new text
+    createNewProcessingButton('resultSectionButtons');
 }
-
 // Show stopped state
 function showStopped() {
     const stoppedMessage = document.getElementById('stoppedMessage');
@@ -839,17 +1160,25 @@ function showStopped() {
     } else {
         stoppedMessage.textContent = 'Video processing was stopped by user. You can download the partially processed video.';
         videoDownloadSection.style.display = 'block';
-        partialDownloadLink.href = `/video/${currentStreamId}`;
-        partialDownloadLink.download = `partial_${currentStreamId}`;
+        if (currentStreamId) {
+            partialDownloadLink.href = `/video/${currentStreamId}`;
+            partialDownloadLink.download = `partial_${currentStreamId}`;
+        }
     }
     
     document.getElementById('stoppedSection').style.display = 'block';
     document.getElementById('progressSection').style.display = 'none';
     document.getElementById('liveFramesSection').style.display = 'none';
     document.getElementById('resultSection').style.display = 'none';
+    
+    // Create button with new text
+    createNewProcessingButton('stoppedSectionButtons');
 }
 
 // Show error
+
+
+
 function showError(message) {
     document.getElementById('errorMessage').textContent = message;
     document.getElementById('errorSection').style.display = 'block';
@@ -862,7 +1191,242 @@ function showError(message) {
     
     if (progressInterval) {
         clearInterval(progressInterval);
+        progressInterval = null;
     }
+    
+    // Create button with new text
+    createNewProcessingButton('errorSectionButtons');
+}
+
+// Add reset function after processing ends
+function resetProcessingState() {
+    console.log("Resetting processing state - Manual reset by user");
+    stopFrameCapture();
+    // Reset video input
+    document.getElementById('videoInput').value = '';
+    document.getElementById('fileName').textContent = '';
+    
+    // Show upload box
+    document.getElementById('uploadBox').style.display = 'block';
+    
+    // Hide all other sections
+    document.getElementById('fileInfo').style.display = 'none';
+    document.getElementById('webcamInfo').style.display = 'none';
+    document.getElementById('dashboardStatistics').style.display = 'none';
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('liveFramesSection').style.display = 'none';
+    document.getElementById('resultSection').style.display = 'none';
+    document.getElementById('stoppedSection').style.display = 'none';
+    document.getElementById('errorSection').style.display = 'none';
+    
+    // Clear button containers
+    const buttonContainers = ['resultSectionButtons', 'stoppedSectionButtons', 'errorSectionButtons'];
+    buttonContainers.forEach(containerId => {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = '';
+        }
+    });
+    
+    // Remove any reset buttons that were added directly
+    const resetButtons = ['resetButton', 'resetButtonResult', 'resetButtonError'];
+    resetButtons.forEach(buttonId => {
+        const button = document.getElementById(buttonId);
+        if (button) {
+            button.remove();
+        }
+    });
+    
+    // Clear stream image
+    const streamImg = document.getElementById('liveStream');
+    streamImg.src = '';
+    
+    // Reset progress bar
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('progressText').textContent = 'Processing: 0.0%';
+    document.getElementById('frameCount').textContent = 'Frames: 0/0';
+    document.getElementById('frameStatus').textContent = 'Connecting to stream...';
+    
+    // Reset dashboard
+    document.getElementById('totalFaces').textContent = '0';
+    document.getElementById('knownFaces').textContent = '0';
+    document.getElementById('unknownFaces').textContent = '0';
+    
+    // Clear interval if exists
+    if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+    }
+    
+    // Reset variables
+    currentStreamId = '';
+    isWebcam = false;
+    selectedFiles = [];
+    videoStartTime = null;
+    videoEndTime = null;
+    videoName = '';
+    
+    console.log("✅ Processing state reset complete - Ready for new processing");
+}
+function startNewSession() {
+    console.log('Starting new processing session...');
+    
+    stopFrameCapture();
+    
+    resetProcessingState();
+    // Reset video input
+    document.getElementById('videoInput').value = '';
+    document.getElementById('fileName').textContent = '';
+    
+    // Show upload box
+    document.getElementById('uploadBox').style.display = 'block';
+    
+    // Hide all other sections
+    document.getElementById('fileInfo').style.display = 'none';
+    document.getElementById('webcamInfo').style.display = 'none';
+    document.getElementById('dashboardStatistics').style.display = 'none';
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('liveFramesSection').style.display = 'none';
+    document.getElementById('resultSection').style.display = 'none';
+    document.getElementById('stoppedSection').style.display = 'none';
+    document.getElementById('errorSection').style.display = 'none';
+    
+    // Clear button containers
+    const buttonContainers = ['resultSectionButtons', 'stoppedSectionButtons', 'errorSectionButtons'];
+    buttonContainers.forEach(containerId => {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = '';
+        }
+    });
+    
+    // Clear stream image
+    const streamImg = document.getElementById('liveStream');
+    streamImg.src = '';
+    
+    // Reset progress bar
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('progressText').textContent = 'Processing: 0.0%';
+    document.getElementById('frameCount').textContent = 'Frames: 0/0';
+    document.getElementById('frameStatus').textContent = 'Connecting to stream...';
+    
+    // Reset dashboard
+    document.getElementById('totalFaces').textContent = '0';
+    document.getElementById('knownFaces').textContent = '0';
+    document.getElementById('unknownFaces').textContent = '0';
+    
+    // Clear interval if exists
+    if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+    }
+    
+    // Reset variables
+    currentStreamId = '';
+    isWebcam = false;
+    selectedFiles = [];
+    videoStartTime = null;
+    videoEndTime = null;
+    videoName = '';
+    
+    console.log('✅ New processing session ready');
+}
+
+function createNewProcessingButton(containerId) {
+    const buttonsContainer = document.getElementById(containerId);
+    if (buttonsContainer) {
+        buttonsContainer.innerHTML = '';
+        const newSessionButton = document.createElement('button');
+        newSessionButton.className = 'start-new-session-btn';
+        newSessionButton.textContent = 'New Processing'; // CHANGED TEXT
+        newSessionButton.onclick = startNewSession;
+        buttonsContainer.appendChild(newSessionButton);
+    }
+}
+
+
+// Optional: Add this notification function if not already in your script.js
+function showNotification(message, type = 'info') {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.innerHTML = `
+        <span>${message}</span>
+        <button onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    // Style the notification
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+        color: white;
+        border-radius: 8px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        z-index: 10000;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        min-width: 300px;
+        max-width: 400px;
+        animation: slideIn 0.3s ease;
+    `;
+    
+    // Add styles for notification button
+    const closeBtn = notification.querySelector('button');
+    closeBtn.style.cssText = `
+        background: transparent;
+        border: none;
+        color: white;
+        font-size: 20px;
+        cursor: pointer;
+        margin-left: 15px;
+        padding: 0;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        transition: background 0.3s;
+    `;
+    
+    closeBtn.onmouseover = function() {
+        this.style.background = 'rgba(255,255,255,0.2)';
+    };
+    
+    closeBtn.onmouseout = function() {
+        this.style.background = 'transparent';
+    };
+    
+    // Add animation
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+    
+    // Add to body
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (notification.parentElement) {
+            notification.style.animation = 'slideIn 0.3s ease reverse';
+            setTimeout(() => notification.remove(), 300);
+        }
+    }, 5000);
 }
 
 // Clean up when page is closed
