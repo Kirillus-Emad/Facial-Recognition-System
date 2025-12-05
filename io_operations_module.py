@@ -27,9 +27,14 @@ class DatabaseHandler:
         self.db_config = db_config
         self.conn = None
         self.attendance_recorded = set()
-        self._connect()
-        self._ensure_schema()
-        self._load_today_attendance()
+        
+        # NEW: Only connect if config provided
+        if db_config:
+            self._connect()
+            self._ensure_schema()
+            self._load_today_attendance()
+        else:
+            print("⚠️ Running without database")
     
     def _connect(self):
         """Establish database connection"""
@@ -57,20 +62,6 @@ class DatabaseHandler:
                 ON attendance (person_id, attendance_date);
             """)
             
-            # Prediction logs table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS prediction_logs (
-                    id SERIAL PRIMARY KEY,
-                    session_id VARCHAR(255),
-                    frame_id INTEGER,
-                    predicted_person_id VARCHAR(50),
-                    actual_person_id VARCHAR(50),
-                    similarity_score FLOAT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_correct BOOLEAN
-                )
-            """)
-            
             self.conn.commit()
             cur.close()
             logger.info("✅ Database schema verified")
@@ -92,7 +83,27 @@ class DatabaseHandler:
         except Exception as e:
             logger.error(f"Error loading attendance: {e}")
             self.attendance_recorded = set()
-    
+            
+            
+    def log_prediction(self, session_id, frame_id, predicted_id, actual_id, score):
+        """Log prediction for MLOps monitoring"""
+        try:
+            cur = self.conn.cursor()
+            is_correct = (predicted_id == actual_id)
+            
+            cur.execute("""
+                INSERT INTO prediction_logs 
+                (session_id, frame_id, predicted_person_id, actual_person_id, 
+                 similarity_score, is_correct)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (session_id, frame_id, predicted_id, actual_id, score, is_correct))
+            
+            self.conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.error(f"Prediction logging error: {e}")
+            
+            
     def mark_attendance(self, person_id):
         """Mark attendance (idempotent)"""
         try:
@@ -114,24 +125,6 @@ class DatabaseHandler:
         except Exception as e:
             logger.error(f"Attendance error for {person_id}: {e}")
             return False
-    
-    def log_prediction(self, session_id, frame_id, predicted_id, actual_id, score):
-        """Log prediction for MLOps monitoring"""
-        try:
-            cur = self.conn.cursor()
-            is_correct = (predicted_id == actual_id)
-            
-            cur.execute("""
-                INSERT INTO prediction_logs 
-                (session_id, frame_id, predicted_person_id, actual_person_id, 
-                 similarity_score, is_correct)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (session_id, frame_id, predicted_id, actual_id, score, is_correct))
-            
-            self.conn.commit()
-            cur.close()
-        except Exception as e:
-            logger.error(f"Prediction logging error: {e}")
     
     def close(self):
         """Close database connection"""
@@ -189,14 +182,7 @@ class IOProcessor:
                     person_id = task['person_id']
                     self.db_handler.mark_attendance(person_id)
                 
-                elif task_type == 'prediction_log':
-                    self.db_handler.log_prediction(
-                        task['session_id'],
-                        task['frame_id'],
-                        task['predicted_id'],
-                        task['actual_id'],
-                        task['score']
-                    )
+
                 
                 elif task_type == 'init_video':
                     session_id = task['session_id']

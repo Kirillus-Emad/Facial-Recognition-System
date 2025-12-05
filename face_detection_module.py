@@ -1,8 +1,7 @@
-# face_detection_module.py - Core Face Detection (High Priority)
+# face_detection_module.py - FIXED: Added FPS tracking
 """
 HIGH PRIORITY MODULE - Handles only face detection and recognition
-Runs in main process with maximum CPU/GPU resources
-NO database operations, NO file I/O, NO logging here
+FIXED: Added FPS measurement and display
 """
 import cv2
 import numpy as np
@@ -12,16 +11,14 @@ from tensorflow.keras.models import load_model
 from collections import deque
 import time
 
-# Initialize models globally (loaded once)
-yolo_model = YOLO("yolov8n-face-lindevs.pt")
-arcface_model = load_model('arcface_v3_256D.h5')
+yolo_model = YOLO("models/yolov8n-face-lindevs.pt")
+arcface_model = load_model('models/arcface_v3_256D.h5')
 
-# Frame skipping configuration
 PROCESS_EVERY_N_FRAMES = 2
 
 
 class FaceDetector:
-    """High-performance face detection and recognition"""
+    """High-performance face detection and recognition with FPS tracking"""
     
     def __init__(self, gallery_embeddings, camera_view="Front", threshold=1.04):
         self.gallery_embeddings = gallery_embeddings
@@ -29,30 +26,53 @@ class FaceDetector:
         self.threshold = threshold
         self.frame_counter = 0
         self.tracker_cache = {}
-        
-        # Performance optimization: LRU cache for embeddings
         self.embedding_cache = deque(maxlen=100)
+  
+        self.prev_time = time.time()
+        self.current_fps = 0.0
+        self.smoothing = 0.9 
+
+        # FPS tracking
+        self.current_fps = 0.0
+
         
     def should_process_frame(self):
         """Determine if this frame should be processed"""
         self.frame_counter += 1
         return self.frame_counter % PROCESS_EVERY_N_FRAMES == 0
     
+    
+    def update_fps(self):
+        now = time.time()
+        elapsed = now - self.prev_time
+        self.prev_time = now
+
+        if elapsed > 0:
+            instant_fps = 1.0 / elapsed
+            # Smooth FPS to avoid jumpy values
+            self.current_fps = (
+                self.smoothing * self.current_fps + 
+                (1 - self.smoothing) * instant_fps
+            )
+
+        return self.current_fps
+    
+    def get_fps(self):
+        """Get current FPS"""
+        return self.current_fps
+    
     def is_valid_face_region(self, x1, y1, x2, y2, frame_shape):
         """Check if face bounding box is valid"""
         h_frame, w_frame = frame_shape[:2]
         w, h = x2 - x1, y2 - y1
         
-        # Border check
         if x1 <= 2 or y1 <= 2 or x2 >= (w_frame - 2) or y2 >= (h_frame - 2):
             return False, "border"
         
-        # Aspect ratio check
         aspect_ratio = w / float(h)
         if aspect_ratio < 0.5 or aspect_ratio > 1.5:
             return False, "aspect"
         
-        # Camera view specific checks
         if self.camera_view == 'Front':
             if y2 < 330 and (x1 > 70 or x2 < w_frame - 70):
                 return False, "distance"
@@ -76,18 +96,15 @@ class FaceDetector:
             
             gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
             
-            # Texture check
             focus_measure = cv2.Laplacian(gray, cv2.CV_64F).var()
             if focus_measure < 20:
                 return True
             
-            # Color saturation
             hsv = cv2.cvtColor(face_region, cv2.COLOR_BGR2HSV)
             sat_mean = hsv[:, :, 1].mean()
             if sat_mean < 25:
                 return True
             
-            # Motion check
             if not hasattr(self, '_last_face'):
                 self._last_face = gray
                 return False
@@ -161,21 +178,13 @@ class FaceDetector:
     
     def detect_and_recognize(self, frame, frame_id):
         """
-        Main detection and recognition function
-        Returns: detections list with format:
-        [{
-            'bbox': (x1, y1, x2, y2),
-            'track_id': int,
-            'subject': str,
-            'score': float,
-            'face_crop': np.array,
-            'status': str  # 'recognized', 'unknown', 'spoof', 'invalid'
-        }]
+        Main detection and recognition function with FPS tracking
         """
+        # Update FPS
+        processed_fps = self.update_fps()   
         detections = []
         h_frame, w_frame = frame.shape[:2]
         
-        # Run YOLO detection with tracking
         results = yolo_model.track(frame, persist=True, conf=0.80, imgsz=640, tracker='botsort.yaml')[0]
         
         if results.boxes is None:
@@ -186,7 +195,6 @@ class FaceDetector:
         for box, track_id in zip(results.boxes.xyxy, ids):
             x1, y1, x2, y2 = map(int, box)
             
-            # Validate face region
             is_valid, reason = self.is_valid_face_region(x1, y1, x2, y2, frame.shape)
             if not is_valid:
                 detections.append({
@@ -195,18 +203,17 @@ class FaceDetector:
                     'status': f'invalid_{reason}',
                     'subject': None,
                     'score': None,
-                    'face_crop': None
+                    'face_crop': None,
+                    'processed_fps': processed_fps,
                 })
                 continue
             
-            # Extract face with padding
             face_crop = frame[max(0, y1-35):min(h_frame, y2+25), 
                              max(0, x1-15):min(w_frame, x2+30)]
             
             if face_crop.size == 0:
                 continue
             
-            # Anti-spoofing check
             if self.is_spoof(frame, (x1, y1, x2, y2)):
                 detections.append({
                     'bbox': (x1, y1, x2, y2),
@@ -214,15 +221,14 @@ class FaceDetector:
                     'status': 'spoof',
                     'subject': None,
                     'score': None,
-                    'face_crop': face_crop
+                    'face_crop': face_crop,
+                    'processed_fps': processed_fps
                 })
                 continue
             
-            # Check tracker cache
             if track_id in self.tracker_cache:
                 subject, score, _ = self.tracker_cache[track_id]
             else:
-                # Preprocess and recognize
                 enhanced_face = self.preprocess_face(face_crop)
                 embedding = self.compute_embedding(enhanced_face)
                 
@@ -238,66 +244,67 @@ class FaceDetector:
                 'status': 'recognized' if subject != 'Unknown' else 'unknown',
                 'subject': subject,
                 'score': float(score),
-                'face_crop': face_crop
+                'face_crop': face_crop,
+                'processed_fps': processed_fps
             })
         
         return detections
 
 
 class FrameAnnotator:
-    """Fast frame annotation (runs in main process)"""
+    """Fast frame annotation with FPS display"""
     
     @staticmethod
     def annotate_frame(frame, detections, frame_id, camera_view, stats):
         """
-        Annotate frame with detection results
-        Args:
-            frame: input frame
-            detections: list of detection dicts
-            frame_id: current frame number
-            camera_view: camera view name
-            stats: dict with total_faces, known_faces, unknown_faces
+        Annotate frame with detection results and FPS
         """
         annotated = frame.copy()
+        
+        # Get FPS from detections
+
+        if detections is None or len(detections) == 0:
+            processed_fps=0.0
+        else:
+            processed_fps = detections[0].get('processed_fps', 0.0)
         
         for det in detections:
             x1, y1, x2, y2 = det['bbox']
             status = det['status']
             
-            # Determine color based on status
             if status == 'recognized':
-                color = (0, 255, 0)  # Green
+                color = (0, 255, 0)
                 label = f"{det['subject']}: ({det['score']:.2f})"
             elif status == 'unknown':
-                color = (0, 0, 255)  # Red
+                color = (0, 0, 255)
                 label = f"Unknown: ({det['score']:.2f})"
             elif status == 'spoof':
-                color = (0, 0, 255)  # Red
+                color = (0, 0, 255)
                 label = "Spoof Detected!"
-            else:  # invalid
+            else:
                 if 'border' in status:
-                    color = (0, 0, 255)  # Red
+                    color = (0, 0, 255)
                 elif 'aspect' in status:
-                    color = (255, 0, 0)  # Blue
-                else:  # distance
-                    color = (0, 165, 255)  # Orange
+                    color = (255, 0, 0)
+                else:
+                    color = (0, 165, 255)
                 label = None
             
-            # Draw bounding box
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
             
-            # Draw label
             if label:
                 cv2.putText(annotated, label, (x1, y1 - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
-        # Add frame info
-        cv2.putText(annotated, f"Frame: {frame_id} | View: {camera_view}", (20, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(annotated, f"Processed FPS: {processed_fps:.1f}", (30, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         
-        # Add stats
-        cv2.putText(annotated, 
-                   f"Total: {stats['total']} | Known: {stats['known']} | Unknown: {stats['unknown']}", 
-                   (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # cv2.putText(annotated, f"Frame: {frame_id} | View: {camera_view}", (20, 60),
+        #            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # # Add stats with better formatting
+        # cv2.putText(annotated, 
+        #            f"Known: {stats['known']} | Unknown: {stats['unknown']} | Total: {stats['total']}", 
+        #            (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
         return annotated

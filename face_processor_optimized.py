@@ -1,9 +1,9 @@
-# face_processor_optimized.py - Main Processing Coordinator
+# face_processor_optimized.py - FIXED: 480x640 resolution for all outputs
 """
-OPTIMIZED VERSION - Separates computation and I/O
-- Face detection/recognition in main process (high priority)
-- Database/logging/file I/O in separate process (background)
-- Multiprocessing queue for communication
+FIXED VERSION:
+1. All frames resized to 480x640 for streaming and output video
+2. Maintains YOLO detection at original resolution for accuracy
+3. Resizes annotated frames before streaming/saving
 """
 import cv2
 import asyncio
@@ -13,71 +13,94 @@ import numpy as np
 from datetime import datetime
 import uuid
 import json
+import psycopg2
 
-# Import our modules
 from face_detection_module import FaceDetector, FrameAnnotator
 from io_operations_module import start_io_process
 
-# Database configuration
-DB_CONFIG = {
-    'host': "ep-lingering-glade-aghpvil3-pooler.c-2.eu-central-1.aws.neon.tech",
-    'dbname': "neondb",
-    'user': "neondb_owner",
-    'password': "npg_AO7fphz9ieod",
-    'sslmode': "require"
-}
+# FIXED: Target resolution for streaming and output
+STREAM_WIDTH =  640
+STREAM_HEIGHT =  640
 
-# Global I/O queue (will be initialized in main)
-io_queue = None
-io_process = None
+GLOBAL_DB_CONFIG = None
+current_gallery = []
+gallery_loaded_for_config = None
+in_memory_embeddings = {}
 
-# Dashboard counters
-dashboard_stats = {
-    'total_faces': 0,
-    'known_faces': 0,
-    'unknown_faces': 0,
-    'known_faces_list': [],
-    'unknown_faces_list': []
-}
-
-
-def initialize_io_process():
-    """Initialize background I/O process"""
-    global io_queue, io_process
+def set_database_config(db_config):
+    global GLOBAL_DB_CONFIG, in_memory_embeddings
+    GLOBAL_DB_CONFIG = db_config
+    in_memory_embeddings = {}
+    clear_gallery_embeddings()
     
-    if io_queue is None:
-        io_queue = Queue(maxsize=1000)  # Bounded queue
-        io_process = Process(target=start_io_process, args=(io_queue, DB_CONFIG), daemon=True)
-        io_process.start()
-        print("✅ IO Process started")
+    if db_config:
+        print(f"✅ Database config set, gallery cleared for reload")
+    else:
+        print("⚠️ Database config cleared, running without database (in-memory mode)")
+        print("⚠️ All in-memory embeddings cleared - starting fresh")
 
+def get_database_config():
+    return GLOBAL_DB_CONFIG
 
-def shutdown_io_process():
-    """Shutdown background I/O process"""
-    global io_queue, io_process
-    
-    if io_queue:
-        io_queue.put({'type': 'shutdown'})
-    
-    if io_process:
-        io_process.join(timeout=5)
-        if io_process.is_alive():
-            io_process.terminate()
-        print("✅ IO Process stopped")
+def clear_gallery_embeddings():
+    global current_gallery, gallery_loaded_for_config
+    current_gallery = []
+    gallery_loaded_for_config = None
+    print("✅ Gallery embeddings cleared")
 
+def clear_all_temporary_data():
+    global in_memory_embeddings, current_gallery, gallery_loaded_for_config
+    in_memory_embeddings = {}
+    current_gallery = []
+    gallery_loaded_for_config = None
+    print("✅ All temporary data cleared")
+
+def add_in_memory_embedding(person_id, embedding):
+    in_memory_embeddings[str(person_id)] = embedding
+    print(f"✅ Added in-memory embedding for person {person_id}")
+
+def remove_in_memory_embedding(person_id):
+    person_id_str = str(person_id)
+    if person_id_str in in_memory_embeddings:
+        del in_memory_embeddings[person_id_str]
+        print(f"✅ Removed in-memory embedding for person {person_id}")
+
+def get_in_memory_embeddings():
+    return in_memory_embeddings
 
 def load_gallery_embeddings():
-    """Load gallery embeddings from database"""
-    import psycopg2
+    global current_gallery, gallery_loaded_for_config
+    
+    db_config = get_database_config()
+    
+    if not db_config:
+        gallery = []
+        for person_id, embedding in in_memory_embeddings.items():
+            try:
+                norm = np.linalg.norm(embedding)
+                if norm == 0:
+                    continue
+                normalized_embedding = embedding / norm
+                
+                gallery.append({
+                    "subject": str(person_id),
+                    "embedding": normalized_embedding
+                })
+            except Exception as e:
+                print(f"Error processing in-memory embedding for person {person_id}: {e}")
+                continue
+        
+        current_gallery = gallery
+        gallery_loaded_for_config = "IN_MEMORY"
+        print(f"✅ Loaded {len(gallery)} in-memory gallery embeddings")
+        return current_gallery
+    
+    config_key = f"{db_config.get('host', '')}:{db_config.get('dbname', '')}"
+    if gallery_loaded_for_config == config_key:
+        return current_gallery
     
     try:
-        conn = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            dbname=DB_CONFIG['dbname'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            sslmode=DB_CONFIG['sslmode']
-        )
+        conn = psycopg2.connect(**db_config)
         cur = conn.cursor()
         cur.execute("SELECT person_id, embedding FROM person_embeddings ORDER BY person_id")
         rows = cur.fetchall()
@@ -110,14 +133,56 @@ def load_gallery_embeddings():
             print(f"Error processing embedding for person {person_id}: {e}")
             continue
     
-    print(f"✅ Loaded {len(gallery)} gallery embeddings")
-    return gallery
+    current_gallery = gallery
+    gallery_loaded_for_config = config_key
+    print(f"✅ Loaded {len(gallery)} gallery embeddings from {config_key}")
+    return current_gallery
+
+
+io_queue = None
+io_process = None
+
+dashboard_stats = {
+    'total_faces': 0,
+    'known_faces': 0,
+    'unknown_faces': 0,
+    'known_faces_list': [],
+    'unknown_faces_list': []
+}
+
+tracked_id = set()
+
+
+def initialize_io_process():
+    global io_queue, io_process
+    
+    if io_queue is None:
+        db_config = get_database_config()
+        io_queue = Queue(maxsize=1000)
+        io_process = Process(target=start_io_process, args=(io_queue, db_config), daemon=True)
+        io_process.start()
+        print("✅ IO Process started")
+
+
+def shutdown_io_process():
+    global io_queue, io_process
+    
+    if io_queue:
+        try:
+            io_queue.put({'type': 'shutdown'})
+        except:
+            pass
+    
+    if io_process:
+        io_process.join(timeout=5)
+        if io_process.is_alive():
+            io_process.terminate()
+        print("✅ IO Process stopped")
 
 
 def reset_dashboard():
-    """Reset dashboard statistics"""
-    global dashboard_stats,tracked_id
-    tracked_id=set()
+    global dashboard_stats, tracked_id
+    tracked_id = set()
     dashboard_stats = {
         'total_faces': 0,
         'known_faces': 0,
@@ -128,8 +193,7 @@ def reset_dashboard():
 
 
 def update_dashboard(detections):
-    """Update dashboard with new detections"""
-    global dashboard_stats,tracked_id
+    global dashboard_stats, tracked_id
     
     for det in detections:
         if det['status'] == 'recognized' and det['track_id'] not in tracked_id:
@@ -137,7 +201,6 @@ def update_dashboard(detections):
             dashboard_stats['total_faces'] += 1
             dashboard_stats['known_faces'] += 1
             
-            # Store face data (limit to 100 faces)
             if len(dashboard_stats['known_faces_list']) < 100:
                 success, buffer = cv2.imencode('.jpg', det['face_crop'])
                 if success:
@@ -168,7 +231,6 @@ def update_dashboard(detections):
 
 
 def get_dashboard_data():
-    """Get current dashboard data"""
     return {
         'total_faces': dashboard_stats['total_faces'],
         'known_faces_num': dashboard_stats['known_faces'],
@@ -180,22 +242,15 @@ def get_dashboard_data():
 
 async def process_video_realtime_frames(input_path: str, filename: str, 
                                        active_streams: dict, camera_view: str = "Front"):
-    """Process video frames with optimized pipeline"""
+    """FIXED: Process video with 480x640 output resolution"""
     global io_queue
     
-    # Initialize I/O process if not done
     initialize_io_process()
-    
-    # Reset dashboard
     reset_dashboard()
     
-    # Generate session ID
     session_id = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     
-    # Load gallery
     gallery = load_gallery_embeddings()
-    
-    # Initialize detector
     detector = FaceDetector(gallery, camera_view=camera_view)
     
     cap = None
@@ -205,34 +260,34 @@ async def process_video_realtime_frames(input_path: str, filename: str,
             raise Exception(f"Cannot open video: {input_path}")
         
         fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        # Initialize stream info
         stream_info = active_streams[filename]
         stream_info['total_frames'] = total_frames
         stream_info['processed_frames'] = 0
         stream_info['session_id'] = session_id
         
-        # Initialize video writer in I/O process
-        output_path = f"processed_videos/processed_{filename}"
+        output_path = f"/tmp/face_recognition/processed_videos/processed_{filename}"
+        
+        # FIXED: Initialize video writer with 480x640 resolution
         io_queue.put({
             'type': 'init_video',
             'session_id': session_id,
             'output_path': output_path,
             'fps': fps,
-            'frame_size': (width, height)
+            'frame_size': (STREAM_WIDTH, STREAM_HEIGHT)  # FIXED: Use target resolution
         })
         
         frame_id = 0
         print(f"🚀 Starting video processing: {filename}")
         print(f"📹 Camera View: {camera_view}")
+        print(f"📐 Output Resolution: {STREAM_WIDTH}x{STREAM_HEIGHT}")
         print(f"⚡ Total frames: {total_frames}")
         
         while True:
             if stream_info.get("stop_requested", False):
                 print(f"🛑 Stop requested for: {filename}")
+                stream_info["status"] = "stopped"
                 break
             
             ret, frame = cap.read()
@@ -242,33 +297,19 @@ async def process_video_realtime_frames(input_path: str, filename: str,
             frame_id += 1
             stream_info['processed_frames'] = frame_id
             
-            # CRITICAL PATH: Detection and recognition (main process)
             if detector.should_process_frame():
+                # Detect on full resolution frame for accuracy
                 detections = detector.detect_and_recognize(frame, frame_id)
-                
-                # Update dashboard
                 update_dashboard(detections)
                 
-                # Send I/O tasks to background process (non-blocking)
+                # Mark attendance
                 for det in detections:
                     if det['status'] == 'recognized' and det['subject']:
                         try:
                             person_id = int(det['subject'])
-                            
-                            # Queue attendance marking
                             io_queue.put({
                                 'type': 'attendance',
                                 'person_id': person_id
-                            }, block=False)
-                            
-                            # Queue prediction logging
-                            io_queue.put({
-                                'type': 'prediction_log',
-                                'session_id': session_id,
-                                'frame_id': frame_id,
-                                'predicted_id': det['subject'],
-                                'actual_id': det['subject'],
-                                'score': det['score']
                             }, block=False)
                         except:
                             pass
@@ -283,26 +324,27 @@ async def process_video_realtime_frames(input_path: str, filename: str,
                     }
                 )
             else:
-                # Fast path: just add frame counter
                 annotated = frame.copy()
                 cv2.putText(annotated, f"Frame: {frame_id} | View: {camera_view} | SKIPPED", 
-                           (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                           (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Queue frame for video writing (non-blocking)
+            # FIXED: Resize frame to 480x640 for streaming and output
+            resized_frame = cv2.resize(annotated, (STREAM_WIDTH, STREAM_HEIGHT))
+            
+            # Write resized frame to output video
             try:
                 io_queue.put({
                     'type': 'write_frame',
                     'session_id': session_id,
-                    'frame': annotated.copy()
+                    'frame': resized_frame.copy()  # FIXED: Write resized frame
                 }, block=False)
             except:
-                pass  # Skip if queue full
+                pass
             
-            # Update dashboard data
             stream_info['dashboard_data'] = get_dashboard_data()
             
-            # Stream frame to client
-            success, jpeg_frame = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            # FIXED: Stream resized frame
+            success, jpeg_frame = cv2.imencode('.jpg', resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if success:
                 try:
                     await stream_info["frame_queue"].put(jpeg_frame.tobytes())
@@ -310,9 +352,16 @@ async def process_video_realtime_frames(input_path: str, filename: str,
                     pass
             
             if stream_info.get("stop_requested", False):
+                stream_info["status"] = "stopped"
                 break
             
-            await asyncio.sleep(0.03)  # ~30 FPS
+            await asyncio.sleep(0.03)
+        
+        if not stream_info.get("stop_requested", False):
+            stream_info["status"] = "completed"
+            print(f"✅ Video processing completed: {filename}")
+        else:
+            print(f"🛑 Video processing stopped by user: {filename}")
         
     except Exception as e:
         print(f"❌ Video processing error: {e}")
@@ -324,24 +373,23 @@ async def process_video_realtime_frames(input_path: str, filename: str,
         if cap:
             cap.release()
         
-        # Close video writer in I/O process
-        io_queue.put({
-            'type': 'close_video',
-            'session_id': session_id
-        })
+        try:
+            io_queue.put({
+                'type': 'close_video',
+                'session_id': session_id
+            })
+        except:
+            pass
         
-        # Send end signal
-        if filename in active_streams and not active_streams[filename].get("stop_requested", False):
+        if filename in active_streams:
             try:
                 await active_streams[filename]["frame_queue"].put("END")
             except:
                 pass
-        
-        print(f"✅ Video processing completed: {filename}")
 
 
 async def process_webcam_frames(session_id: str, webcam_streams: dict, camera_view: str = "Front"):
-    """Process webcam frames with optimized pipeline"""
+    """FIXED: Process webcam with 480x640 output resolution"""
     global io_queue
     
     initialize_io_process()
@@ -356,8 +404,9 @@ async def process_webcam_frames(session_id: str, webcam_streams: dict, camera_vi
         if not cap.isOpened():
             raise Exception("Cannot open webcam")
         
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
+        # FIXED: Set webcam to capture at 640x480
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, STREAM_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, STREAM_HEIGHT)
         cap.set(cv2.CAP_PROP_FPS, 30)
         
         stream_info = webcam_streams[session_id]
@@ -367,6 +416,7 @@ async def process_webcam_frames(session_id: str, webcam_streams: dict, camera_vi
         frame_id = 0
         print(f"📷 Webcam started: {session_id}")
         print(f"📹 Camera View: {camera_view}")
+        print(f"📐 Resolution: {STREAM_WIDTH}x{STREAM_HEIGHT}")
         
         while True:
             if stream_info.get("stop_requested", False):
@@ -381,12 +431,10 @@ async def process_webcam_frames(session_id: str, webcam_streams: dict, camera_vi
             frame_id += 1
             stream_info["processed_frames"] = frame_id
             
-            # Detection and recognition
             if detector.should_process_frame():
                 detections = detector.detect_and_recognize(frame, frame_id)
                 update_dashboard(detections)
                 
-                # Queue I/O tasks
                 for det in detections:
                     if det['status'] == 'recognized' and det['subject']:
                         try:
@@ -409,10 +457,11 @@ async def process_webcam_frames(session_id: str, webcam_streams: dict, camera_vi
             else:
                 annotated = frame.copy()
                 cv2.putText(annotated, f"Frame: {frame_id} | View: {camera_view} | SKIPPED", 
-                           (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                           (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
             stream_info['dashboard_data'] = get_dashboard_data()
             
+            # Frame is already at target resolution from webcam
             success, jpeg_frame = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if success:
                 try:
@@ -442,12 +491,18 @@ async def process_webcam_frames(session_id: str, webcam_streams: dict, camera_vi
         print(f"✅ Webcam processing completed: {session_id}")
 
 
-# Export functions for main.py
 __all__ = [
     'process_video_realtime_frames',
     'process_webcam_frames',
     'get_dashboard_data',
     'initialize_io_process',
     'shutdown_io_process',
-    'load_gallery_embeddings'
+    'load_gallery_embeddings',
+    'set_database_config',
+    'get_database_config',
+    'add_in_memory_embedding',
+    'remove_in_memory_embedding',
+    'get_in_memory_embeddings',
+    'clear_gallery_embeddings',
+    'clear_all_temporary_data'
 ]
